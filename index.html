@@ -9,6 +9,8 @@
   h1{color:#ffb000;margin:4px 0 10px}
   input,select,button{font-size:16px;padding:8px;margin:4px 0;width:100%;box-sizing:border-box;border-radius:6px;border:1px solid #333;background:#222;color:#eee}
   button{background:#ffb000;color:#111;border:0;font-weight:bold;cursor:pointer}
+  button.ghost{background:#444;color:#eee}
+  button.small{width:auto;padding:4px 10px;font-size:13px;margin:0}
   .card{background:#1d1d1d;border-radius:8px;padding:10px;margin:10px 0}
   .row{display:flex;gap:6px}
   .row>*{width:50%}
@@ -16,38 +18,48 @@
   td,th{padding:6px;border-bottom:1px solid #333;text-align:left}
   .muted{color:#999;font-size:13px}
   .sec{background:#222;color:#ffb000;padding:4px 8px;margin-top:12px;border-radius:4px;font-weight:bold}
-  .ghost{background:#444;color:#eee}
-  label{display:block}
+  .dot{display:inline-block;width:9px;height:9px;border-radius:50%;background:#e53935;margin-left:6px;vertical-align:middle}
+  .pick{font-size:13px;margin:2px 0}
+  .match{border-top:1px solid #333;padding-top:6px;margin-top:6px}
 </style>
 </head>
 <body>
 <h1>11x21</h1>
 <div id="app">Loading…</div>
+<input id="pic" type="file" accept="image/*" hidden>
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
 <script>
-const SUPABASE_URL = "https://hbyhfjumwstmvasewhot.supabase.co";
-const SUPABASE_KEY = "sb_publishable_EAcMJDrnmYmKs03i95_nKQ_Flc59IbM";
-const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
-
+const SB = supabase.createClient("https://hbyhfjumwstmvasewhot.supabase.co", "sb_publishable_EAcMJDrnmYmKs03i95_nKQ_Flc59IbM");
 const app = document.getElementById('app');
-let me = null;
+let me = null, MAP = {}, scoreView = 'active';
 
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const num = v => (v === '' || v == null) ? null : Number(v);
-const toast = msg => alert(msg);
 const back = () => `<button class="ghost" onclick="main()" style="margin-top:10px">← Back</button>`;
-const opt = (cur, list) => list.map(([v, l]) => `<option value="${v}" ${cur === v ? 'selected' : ''}>${l}</option>`).join('');
+const opt = (cur, list) => list.map(([v, l]) => `<option value="${esc(v)}" ${cur === v ? 'selected' : ''}>${esc(l)}</option>`).join('');
+const kick = iso => new Date(iso).toLocaleString('en-GB', { timeZone: 'Asia/Riyadh', weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) + ' KSA';
+const avatar = (p, s = 48) => p && p.pic
+  ? `<img src="${p.pic}" style="width:${s}px;height:${s}px;border-radius:50%;object-fit:cover">`
+  : `<div style="width:${s}px;height:${s}px;border-radius:50%;background:#333;display:flex;align-items:center;justify-content:center;font-weight:bold;color:#ffb000">${esc((p && p.name || '?')[0])}</div>`;
+
+/* ---------- Start and sign-in ---------- */
 
 async function init() {
-  const saved = JSON.parse(localStorage.getItem('11x21_me') || 'null');
-  if (saved) {
-    const { data } = await sb.from('players').select('*')
-      .eq('player_number', saved.player_number).eq('pin', saved.pin).maybeSingle();
-    if (data) { me = data; return main(); }
+  $('pic').onchange = e => setPic(e.target.files[0]);
+  const s = JSON.parse(localStorage.getItem('11x21_me') || 'null');
+  if (s) {
+    const { data } = await SB.from('players').select('*')
+      .eq('player_number', s.player_number).eq('pin', s.pin).maybeSingle();
+    if (data) { me = data; return route(); }
   }
   authScreen();
+}
+
+function route() {
+  if (location.hash === '#admin') return matchesScreen();
+  main();
 }
 
 function authScreen() {
@@ -55,35 +67,33 @@ function authScreen() {
     <div class="card"><b>Sign up</b>
       <input id="sname" placeholder="Your name">
       <input id="spin" placeholder="PIN (4 digits)" inputmode="numeric">
-      <button onclick="signup()">Create player</button>
-    </div>
+      <button onclick="signup()">Create player</button></div>
     <div class="card"><b>Log in</b>
       <input id="lnum" placeholder="Player number" inputmode="numeric">
       <input id="lpin" placeholder="PIN" inputmode="numeric">
-      <button onclick="login()">Log in</button>
-    </div>`;
+      <button onclick="login()">Log in</button></div>`;
 }
 
 async function signup() {
   const name = $('sname').value.trim(), pin = $('spin').value.trim();
-  if (!name || !/^\d{4}$/.test(pin)) return toast('Enter a name and a 4-digit PIN.');
-  const { data, error } = await sb.from('players').insert({ name, pin }).select().single();
-  if (error) return toast('Error: ' + error.message);
+  if (!name || !/^\d{4}$/.test(pin)) return alert('Enter a name and a 4-digit PIN.');
+  const { data, error } = await SB.from('players').insert({ name, pin }).select().single();
+  if (error) return alert('Error: ' + error.message);
   setMe(data);
-  toast('Your player number is ' + data.player_number);
+  alert('Your player number is ' + data.player_number);
 }
 
 async function login() {
   const n = Number($('lnum').value), pin = $('lpin').value.trim();
-  const { data } = await sb.from('players').select('*').eq('player_number', n).eq('pin', pin).maybeSingle();
-  if (!data) return toast('Wrong player number or PIN.');
+  const { data } = await SB.from('players').select('*').eq('player_number', n).eq('pin', pin).maybeSingle();
+  if (!data) return alert('Wrong player number or PIN.');
   setMe(data);
 }
 
 function setMe(p) {
   me = p;
   localStorage.setItem('11x21_me', JSON.stringify({ player_number: p.player_number, pin: p.pin }));
-  main();
+  route();
 }
 
 function logout() {
@@ -92,30 +102,97 @@ function logout() {
   authScreen();
 }
 
-function main() {
+/* ---------- Shared data helpers ---------- */
+
+async function loadAll() {
+  const { data } = await SB.from('matches').select('*').order('kickoff');
+  MAP = Object.fromEntries((data || []).map(m => [m.id, m]));
+  return MAP;
+}
+
+async function myChallenges() {
+  const { data: inv } = await SB.from('invites')
+    .select('challenge_id,status,challenges(id,name,type)')
+    .eq('player_number', me.player_number);
+  return {
+    pending: (inv || []).filter(i => i.status === 'pending'),
+    accepted: (inv || []).filter(i => i.status === 'accepted')
+  };
+}
+
+async function matchIdsOf(cid) {
+  const { data } = await SB.from('challenge_matches').select('match_id').eq('challenge_id', cid);
+  return (data || []).map(x => x.match_id);
+}
+
+function seenKey() { return 'seen_' + me.player_number; }
+function seenSet() { return new Set(JSON.parse(localStorage.getItem(seenKey()) || '[]')); }
+
+async function badge() {
+  await loadAll();
+  const { pending, accepted } = await myChallenges();
+  const seen = seenSet();
+  let results = 0;
+  for (const a of accepted) {
+    const ids = await matchIdsOf(a.challenge_id);
+    results += ids.filter(id => MAP[id] && MAP[id].ft_home != null && !seen.has(id)).length;
+  }
+  return { invites: pending.length, results };
+}
+
+/* ---------- Main ---------- */
+
+async function main() {
+  const b = await badge();
   app.innerHTML = `
-    <div class="card">Player <b>${me.player_number}</b> — ${esc(me.name)}</div>
+    <div class="card" style="display:flex;align-items:center;gap:12px">
+      ${avatar(me, 56)}
+      <div style="flex:1">
+        <b>${esc(me.name)}</b>
+        <div class="muted">Player number <b>${me.player_number}</b>
+          <button class="ghost small" onclick="copyNum()">Copy</button></div>
+        <button class="ghost small" onclick="$('pic').click()" style="margin-top:4px">Change picture</button>
+      </div>
+    </div>
     <button onclick="challengeScreen()">Challenge (set up)</button>
-    <button onclick="predictScreen()" style="margin-top:6px">Predict (play)</button>
-    <button onclick="scoresScreen()" style="margin-top:6px">Scores (check)</button>
-    <button onclick="matchesScreen()" style="margin-top:6px">Matches &amp; results</button>
+    <button onclick="predictScreen()" style="margin-top:6px">Predict (play)${b.invites ? '<span class="dot"></span>' : ''}</button>
+    <button onclick="scoresScreen()" style="margin-top:6px">Scores (check)${b.results ? '<span class="dot"></span>' : ''}</button>
     <button class="ghost" onclick="logout()" style="margin-top:6px">Log out</button>`;
 }
 
-async function upcomingMatches() {
-  const { data } = await sb.from('matches').select('*').is('ft_home', null).order('kickoff');
-  return data || [];
+function copyNum() {
+  const t = String(me.player_number);
+  if (navigator.clipboard) return navigator.clipboard.writeText(t).then(() => alert('Copied ' + t));
+  const i = document.createElement('input');
+  i.value = t; document.body.appendChild(i); i.select();
+  document.execCommand('copy'); i.remove();
+  alert('Copied ' + t);
 }
 
-async function allMatches() {
-  const { data } = await sb.from('matches').select('*').order('kickoff');
-  return data || [];
+// Compress to a 128px square JPEG (a few KB) before saving.
+function setPic(file) {
+  if (!file) return;
+  const img = new Image();
+  img.onload = async () => {
+    const S = 128, c = document.createElement('canvas');
+    c.width = S; c.height = S;
+    const m = Math.min(img.width, img.height);
+    c.getContext('2d').drawImage(img, (img.width - m) / 2, (img.height - m) / 2, m, m, 0, 0, S, S);
+    const data = c.toDataURL('image/jpeg', 0.7);
+    const { error } = await SB.from('players').update({ pic: data }).eq('player_number', me.player_number);
+    if (error) return alert('Error: ' + error.message);
+    me.pic = data;
+    main();
+  };
+  img.src = URL.createObjectURL(file);
 }
 
-/* ---------- Challenge setup ---------- */
+/* ---------- Challenge set-up ---------- */
 
 async function challengeScreen() {
-  const ms = await upcomingMatches();
+  await loadAll();
+  const now = Date.now();
+  const ms = Object.values(MAP).filter(m => m.ft_home == null && new Date(m.kickoff).getTime() > now);
   app.innerHTML = `
     <div class="sec">New challenge</div>
     <select id="ctype">
@@ -126,10 +203,9 @@ async function challengeScreen() {
     <input id="cinv" placeholder="Player numbers to invite, e.g. 3, 7, 12">
     <div class="sec">Matches</div>
     ${ms.length ? ms.map(m => `
-      <label class="card"><input type="checkbox" class="cm" value="${m.id}" style="width:auto">
-        ${esc(m.home)} v ${esc(m.away)}
-        <span class="muted">${new Date(m.kickoff).toLocaleString()}</span></label>`).join('')
-      : '<div class="muted">No upcoming matches. Add some under Matches &amp; results.</div>'}
+      <label class="card" style="display:block"><input type="checkbox" class="cm" value="${m.id}" style="width:auto">
+        ${esc(m.home)} v ${esc(m.away)} <span class="muted">${kick(m.kickoff)}</span></label>`).join('')
+      : '<div class="muted">No upcoming matches.</div>'}
     <button onclick="createChallenge()">Create and lock</button>
     ${back()}`;
 }
@@ -137,21 +213,21 @@ async function challengeScreen() {
 async function createChallenge() {
   const type = Number($('ctype').value), name = $('cname').value.trim() || 'Challenge';
   const matchIds = [...document.querySelectorAll('.cm:checked')].map(c => c.value);
-  if (!matchIds.length) return toast('Pick at least one match.');
+  if (!matchIds.length) return alert('Pick at least one match.');
   const invites = [...new Set($('cinv').value.split(',').map(s => Number(s.trim()))
     .filter(n => n && n !== me.player_number))];
   const code = Math.random().toString(36).slice(2, 8).toUpperCase();
 
-  const { data: ch, error } = await sb.from('challenges')
+  const { data: ch, error } = await SB.from('challenges')
     .insert({ code, type, name, created_by: me.player_number, status: 'open' }).select().single();
-  if (error) return toast('Error: ' + error.message);
+  if (error) return alert('Error: ' + error.message);
 
-  await sb.from('challenge_matches').insert(matchIds.map(match_id => ({ challenge_id: ch.id, match_id })));
-  await sb.from('invites').insert([
+  await SB.from('challenge_matches').insert(matchIds.map(match_id => ({ challenge_id: ch.id, match_id })));
+  await SB.from('invites').insert([
     { challenge_id: ch.id, player_number: me.player_number, status: 'accepted' },
     ...invites.map(p => ({ challenge_id: ch.id, player_number: p, status: 'pending' }))
   ]);
-  toast('Challenge created and sent out.');
+  alert('Challenge created and sent out.');
   main();
 }
 
@@ -159,12 +235,8 @@ async function createChallenge() {
 
 async function predictScreen() {
   app.innerHTML = 'Loading…';
-  const { data: inv } = await sb.from('invites')
-    .select('challenge_id,status,challenges(name,type,created_by)')
-    .eq('player_number', me.player_number);
-  const pending = (inv || []).filter(i => i.status === 'pending');
-  const accepted = (inv || []).filter(i => i.status === 'accepted');
-
+  await loadAll();
+  const { pending, accepted } = await myChallenges();
   let h = `<div class="sec">Invitations</div>`;
   h += pending.length
     ? pending.map(i => `<div class="card"><b>${esc(i.challenges.name)}</b> (${i.challenges.type})
@@ -173,48 +245,61 @@ async function predictScreen() {
           <button class="ghost" onclick="respond(${i.challenge_id},'declined')">Decline</button>
         </div></div>`).join('')
     : '<div class="muted">No invitations.</div>';
-
   h += `<div class="sec">Your challenges</div>`;
-  for (const i of accepted) h += await predictCard(i.challenge_id, i.challenges);
-  if (!accepted.length) h += '<div class="muted">Accept an invitation or create a challenge.</div>';
-
+  let any = false;
+  for (const a of accepted) {
+    const card = await predictCard(a.challenge_id, a.challenges);
+    if (card) { any = true; h += card; }
+  }
+  if (!any) h += '<div class="muted">No open challenges. Accept an invitation or create one.</div>';
   app.innerHTML = h + back();
 }
 
 async function respond(cid, status) {
-  await sb.from('invites').update({ status }).eq('challenge_id', cid).eq('player_number', me.player_number);
+  await SB.from('invites').update({ status }).eq('challenge_id', cid).eq('player_number', me.player_number);
   predictScreen();
 }
 
 async function predictCard(cid, ch) {
-  const { data: cm } = await sb.from('challenge_matches').select('match_id').eq('challenge_id', cid);
-  const { data: ms } = await sb.from('matches').select('*').in('id', (cm || []).map(x => x.match_id)).order('kickoff');
-  const open = (ms || []).filter(m => m.ft_home == null);
-  const { data: preds } = await sb.from('predictions').select('*')
-    .eq('challenge_id', cid).eq('player_number', me.player_number);
-  const pm = Object.fromEntries((preds || []).map(p => [p.match_id, p]));
+  const ids = await matchIdsOf(cid);
+  const ms = ids.map(id => MAP[id]).filter(Boolean).sort((a, b) => a.kickoff.localeCompare(b.kickoff));
+  const open = ms.filter(m => m.ft_home == null);
+  if (!open.length) return '';
+
+  const { data: preds } = await SB.from('predictions').select('*').eq('challenge_id', cid);
+  const mine = Object.fromEntries((preds || []).filter(p => p.player_number === me.player_number).map(p => [p.match_id, p]));
+  const { data: mem } = await SB.from('invites').select('player_number,players(name)')
+    .eq('challenge_id', cid).eq('status', 'accepted');
+  const names = Object.fromEntries((mem || []).map(x => [x.player_number, x.players?.name || '?']));
 
   let h = `<div class="card"><b>${esc(ch.name)}</b> — ${ch.type}`;
-  if (!open.length) return h + ` <span class="muted">(ended)</span></div>`;
-
   for (const m of open) {
-    const p = pm[m.id] || {};
-    h += `<div style="margin-top:8px"><b>${esc(m.home)} v ${esc(m.away)}</b>
+    const p = mine[m.id] || {};
+    const k = `${cid}_${m.id}`;
+    const started = Date.now() >= new Date(m.kickoff).getTime();
+    h += `<div class="match"><b>${esc(m.home)} v ${esc(m.away)}</b> <span class="muted">${kick(m.kickoff)}</span>
       <div class="row">
-        <input id="f_${cid}_${m.id}_h" placeholder="${esc(m.home)} FT" inputmode="numeric" value="${p.ft_home ?? ''}">
-        <input id="f_${cid}_${m.id}_a" placeholder="${esc(m.away)} FT" inputmode="numeric" value="${p.ft_away ?? ''}">
+        <input id="f_${k}_h" placeholder="${esc(m.home)}" inputmode="numeric" value="${p.ft_home ?? ''}" onchange="checkPred('${k}',${ch.type})">
+        <input id="f_${k}_a" placeholder="${esc(m.away)}" inputmode="numeric" value="${p.ft_away ?? ''}" onchange="checkPred('${k}',${ch.type})">
       </div>
-      <select id="w_${cid}_${m.id}">
-        <option value="">Winner</option>${opt(p.winner, [['home','Home win'],['draw','Draw'],['away','Away win']])}
+      <select id="w_${k}" onchange="checkPred('${k}',${ch.type})">
+        <option value="">Winner</option>${opt(p.winner, [['home', m.home + ' wins'], ['draw', 'Draw'], ['away', m.away + ' wins']])}
       </select>`;
     if (ch.type === 21) {
       h += `<div class="row">
-          <input id="h_${cid}_${m.id}_h" placeholder="HT ${esc(m.home)}" inputmode="numeric" value="${p.ht_home ?? ''}">
-          <input id="h_${cid}_${m.id}_a" placeholder="HT ${esc(m.away)}" inputmode="numeric" value="${p.ht_away ?? ''}">
+          <input id="h_${k}_h" placeholder="HT ${esc(m.home)}" inputmode="numeric" value="${p.ht_home ?? ''}" onchange="checkPred('${k}',21)">
+          <input id="h_${k}_a" placeholder="HT ${esc(m.away)}" inputmode="numeric" value="${p.ht_away ?? ''}" onchange="checkPred('${k}',21)">
         </div>
-        <select id="fs_${cid}_${m.id}">
-          <option value="">First to score</option>${opt(p.first_scorer, [['home','Home'],['away','Away'],['none','No one']])}
+        <select id="fs_${k}" onchange="checkPred('${k}',21)">
+          <option value="">First to score</option>${opt(p.first_scorer, [['home', m.home], ['away', m.away], ['none', 'No one']])}
         </select>`;
+    }
+    if (started) {
+      const others = (preds || []).filter(x => x.match_id === m.id);
+      h += others.length
+        ? `<div class="muted" style="margin-top:4px">Everyone's picks (kickoff passed):</div>` +
+          others.map(x => `<div class="pick">${esc(names[x.player_number] || '?')}: ${esc(describe(x, m))}</div>`).join('')
+        : '';
     }
     h += `</div>`;
   }
@@ -222,27 +307,70 @@ async function predictCard(cid, ch) {
   return h;
 }
 
+// Plain-text summary of one prediction.
+function describe(p, m) {
+  const w = p.winner === 'home' ? m.home : p.winner === 'away' ? m.away : p.winner === 'draw' ? 'Draw' : '–';
+  let s = `${p.ft_home ?? '–'}-${p.ft_away ?? '–'} · ${w}`;
+  if (p.ht_home != null || p.ht_away != null || p.first_scorer) {
+    const fs = p.first_scorer === 'home' ? m.home : p.first_scorer === 'away' ? m.away : p.first_scorer === 'none' ? 'No one' : '–';
+    s += ` · HT ${p.ht_home ?? '–'}-${p.ht_away ?? '–'} · first: ${fs}`;
+  }
+  return s;
+}
+
+// Blocks picks that contradict each other, and resets the field that conflicts.
+function checkPred(k, type) {
+  const [, mid] = k.split('_');
+  const m = MAP[mid] || { home: 'Home', away: 'Away' };
+  const g = id => { const e = $(id); return e ? e.value : ''; };
+  const fh = num(g(`f_${k}_h`)), fa = num(g(`f_${k}_a`));
+  const w = $(`w_${k}`);
+  const msgs = [];
+
+  if (fh != null && fa != null && w.value) {
+    const real = fh > fa ? 'home' : fh < fa ? 'away' : 'draw';
+    if (w.value !== real) { w.value = ''; msgs.push('Winner cleared: it does not match the score.'); }
+  }
+
+  if (type === 21) {
+    const hh = num(g(`h_${k}_h`)), ha = num(g(`h_${k}_a`));
+    if ((hh != null && fh != null && hh > fh) || (ha != null && fa != null && ha > fa))
+      msgs.push('Half-time goals cannot be more than full-time goals.');
+
+    const fsEl = $(`fs_${k}`), v = fsEl.value;
+    if (v) {
+      const total = (fh ?? 0) + (fa ?? 0);
+      if (v === 'none' && total > 0) { fsEl.value = ''; msgs.push('"No one" is not possible when goals are predicted.'); }
+      else if (v !== 'none' && fh != null && fa != null && total === 0) { fsEl.value = ''; msgs.push('A 0-0 score means no one scores first.'); }
+      else if (v === 'home' && fh === 0) { fsEl.value = ''; msgs.push(`${m.home} cannot score first if predicted to score 0.`); }
+      else if (v === 'away' && fa === 0) { fsEl.value = ''; msgs.push(`${m.away} cannot score first if predicted to score 0.`); }
+    }
+  }
+  if (msgs.length) alert(msgs.join('\n'));
+}
+
 async function savePredictions(cid, type) {
-  const { data: cm } = await sb.from('challenge_matches').select('match_id').eq('challenge_id', cid);
-  const g = id => { const e = document.getElementById(id); return e ? e.value : ''; };
-  const rows = (cm || []).map(x => x.match_id).map(mid => {
+  const ids = await matchIdsOf(cid);
+  const g = id => { const e = $(id); return e ? e.value : ''; };
+  const rows = ids.map(mid => {
+    const k = `${cid}_${mid}`;
     const r = {
       challenge_id: cid, player_number: me.player_number, match_id: mid,
-      ft_home: num(g(`f_${cid}_${mid}_h`)), ft_away: num(g(`f_${cid}_${mid}_a`)),
-      winner: g(`w_${cid}_${mid}`) || null
+      ft_home: num(g(`f_${k}_h`)), ft_away: num(g(`f_${k}_a`)),
+      winner: g(`w_${k}`) || null
     };
     if (type === 21) {
-      r.ht_home = num(g(`h_${cid}_${mid}_h`));
-      r.ht_away = num(g(`h_${cid}_${mid}_a`));
-      r.first_scorer = g(`fs_${cid}_${mid}`) || null;
+      r.ht_home = num(g(`h_${k}_h`));
+      r.ht_away = num(g(`h_${k}_a`));
+      r.first_scorer = g(`fs_${k}`) || null;
     }
     return r;
   }).filter(r => r.ft_home != null || r.ft_away != null || r.winner || r.first_scorer);
 
-  if (!rows.length) return toast('Nothing to save yet.');
-  const { error } = await sb.from('predictions').upsert(rows, { onConflict: 'challenge_id,player_number,match_id' });
-  if (error) return toast('Error: ' + error.message);
-  toast('Saved.');
+  if (!rows.length) return alert('Nothing to save yet.');
+  const { error } = await SB.from('predictions').upsert(rows, { onConflict: 'challenge_id,player_number,match_id' });
+  if (error) return alert('Error: ' + error.message);
+  alert('Saved.');
 }
 
 /* ---------- Scores ---------- */
@@ -253,8 +381,8 @@ function sc(p, a) { if (p == null || a == null) return 0; return Math.max(0, 3 -
 function pts(p, m, type) {
   if (m.ft_home == null) return null;
   let t = 0;
-  const actualWinner = m.ft_home > m.ft_away ? 'home' : m.ft_home < m.ft_away ? 'away' : 'draw';
-  if (p.winner === actualWinner) t += 5;
+  const actual = m.ft_home > m.ft_away ? 'home' : m.ft_home < m.ft_away ? 'away' : 'draw';
+  if (p.winner === actual) t += 5;
   t += sc(p.ft_home, m.ft_home) + sc(p.ft_away, m.ft_away);
   if (type === 21) {
     t += sc(p.ht_home, m.ht_home) + sc(p.ht_away, m.ht_away);
@@ -265,48 +393,78 @@ function pts(p, m, type) {
 
 async function scoresScreen() {
   app.innerHTML = 'Loading…';
-  const { data: inv } = await sb.from('invites')
-    .select('challenge_id,challenges(name,type)')
-    .eq('player_number', me.player_number).eq('status', 'accepted');
-  let h = '';
-  for (const i of inv || []) h += await scoreCard(i.challenge_id, i.challenges);
-  app.innerHTML = (h || '<div class="muted">No challenges yet.</div>') + back();
+  await loadAll();
+  const { accepted } = await myChallenges();
+
+  // Opening Scores clears the red dot for results shown here.
+  const seen = seenSet();
+  for (const a of accepted) {
+    for (const id of await matchIdsOf(a.challenge_id)) if (MAP[id] && MAP[id].ft_home != null) seen.add(id);
+  }
+  localStorage.setItem(seenKey(), JSON.stringify([...seen]));
+
+  let cards = '';
+  for (const a of accepted) cards += await scoreCard(a.challenge_id, a.challenges);
+  app.innerHTML =
+    `<div class="row">
+       <button class="${scoreView === 'active' ? '' : 'ghost'}" onclick="setView('active')">Active</button>
+       <button class="${scoreView === 'ended' ? '' : 'ghost'}" onclick="setView('ended')">Ended</button>
+     </div>` +
+    (cards || `<div class="muted">No ${scoreView} challenges.</div>`) + back();
 }
+
+function setView(v) { scoreView = v; scoresScreen(); }
 
 async function scoreCard(cid, ch) {
-  const { data: cm } = await sb.from('challenge_matches').select('match_id').eq('challenge_id', cid);
-  const { data: ms } = await sb.from('matches').select('*').in('id', (cm || []).map(x => x.match_id));
-  const { data: mem } = await sb.from('invites').select('player_number,players(name)')
+  const ids = await matchIdsOf(cid);
+  const ms = ids.map(id => MAP[id]).filter(Boolean).sort((a, b) => a.kickoff.localeCompare(b.kickoff));
+  const played = ms.filter(m => m.ft_home != null);
+  const ended = ms.length > 0 && played.length === ms.length;
+  if (scoreView === 'ended' && !ended) return '';
+  if (scoreView === 'active' && ended) return '';
+
+  const { data: preds } = await SB.from('predictions').select('*').eq('challenge_id', cid);
+  const { data: mem } = await SB.from('invites').select('player_number,players(name)')
     .eq('challenge_id', cid).eq('status', 'accepted');
-  const { data: preds } = await sb.from('predictions').select('*').eq('challenge_id', cid);
+  const members = (mem || []).map(x => ({ n: x.player_number, name: x.players?.name || '?' }));
 
-  const matches = ms || [];
-  const played = matches.filter(m => m.ft_home != null);
-  const ended = matches.length > 0 && played.length === matches.length;
-
-  const rows = (mem || []).map(x => {
+  const rows = members.map(mb => {
     let total = 0;
-    for (const p of (preds || []).filter(p => p.player_number === x.player_number)) {
-      const m = matches.find(mm => mm.id === p.match_id);
+    for (const p of (preds || []).filter(p => p.player_number === mb.n)) {
+      const m = MAP[p.match_id];
       if (m) { const v = pts(p, m, ch.type); if (v != null) total += v; }
     }
-    return { name: x.players?.name || '?', total };
+    return { ...mb, total };
   }).sort((a, b) => b.total - a.total);
-
-  // Ties share a rank: rank = 1 + number of players with strictly more points.
   const ranked = rows.map(r => ({ ...r, rank: rows.filter(o => o.total > r.total).length + 1 }));
 
-  return `<div class="card"><b>${esc(ch.name)}</b> — ${ch.type}
-    ${ended ? '<span class="muted">(ended)</span>' : `<span class="muted">(${played.length}/${matches.length} played)</span>`}
+  let h = `<div class="card"><b>${esc(ch.name)}</b> — ${ch.type}
+    <span class="muted">${ended ? '(ended)' : `(${played.length}/${ms.length} played)`}</span>
     <table><tr><th>#</th><th>Player</th><th>Points</th></tr>
       ${ranked.map(r => `<tr><td>${r.rank}</td><td>${esc(r.name)}</td><td>${r.total}</td></tr>`).join('')}
-    </table></div>`;
+    </table>
+    <div class="sec">Predictions by match</div>`;
+
+  for (const m of ms) {
+    const isPlayed = m.ft_home != null;
+    h += `<div class="match"><b>${esc(m.home)} v ${esc(m.away)}</b>
+      <span class="muted">${isPlayed ? `FT ${m.ft_home}-${m.ft_away}` : kick(m.kickoff)}</span>`;
+    for (const mb of members) {
+      const p = (preds || []).find(x => x.player_number === mb.n && x.match_id === m.id);
+      if (!p) { h += `<div class="pick">${esc(mb.name)}: no prediction</div>`; continue; }
+      const v = isPlayed ? pts(p, m, ch.type) : null;
+      h += `<div class="pick">${esc(mb.name)}: ${esc(describe(p, m))}${v != null ? ` → <b>${v} pts</b>` : ''}</div>`;
+    }
+    h += `</div>`;
+  }
+  return h + `</div>`;
 }
 
-/* ---------- Matches & results (admin) ---------- */
+/* ---------- Matches & results (admin, reached via #admin) ---------- */
 
 async function matchesScreen() {
-  const ms = await allMatches();
+  await loadAll();
+  const ms = Object.values(MAP);
   app.innerHTML = `
     <div class="sec">Add match</div>
     <input id="mlg" placeholder="League (e.g. Saudi League)">
@@ -317,7 +475,7 @@ async function matchesScreen() {
     <div class="sec">Results (enter after the match)</div>
     ${ms.map(m => `
       <div class="card"><b>${esc(m.home)} v ${esc(m.away)}</b>
-        <span class="muted">${new Date(m.kickoff).toLocaleString()}</span>
+        <span class="muted">${kick(m.kickoff)}</span>
         <div class="row">
           <input id="r_${m.id}_fh" placeholder="FT ${esc(m.home)}" inputmode="numeric" value="${m.ft_home ?? ''}">
           <input id="r_${m.id}_fa" placeholder="FT ${esc(m.away)}" inputmode="numeric" value="${m.ft_away ?? ''}">
@@ -327,33 +485,33 @@ async function matchesScreen() {
           <input id="r_${m.id}_ha" placeholder="HT ${esc(m.away)}" inputmode="numeric" value="${m.ht_away ?? ''}">
         </div>
         <select id="r_${m.id}_fs">
-          <option value="">First to score</option>${opt(m.first_scorer, [['home','Home'],['away','Away'],['none','No one']])}
+          <option value="">First to score</option>${opt(m.first_scorer, [['home', m.home], ['away', m.away], ['none', 'No one']])}
         </select>
         <button onclick="saveResult('${m.id}')" style="margin-top:6px">Save result</button>
       </div>`).join('')}
-    ${back()}`;
+    <button class="ghost" onclick="location.hash='';main()">Back to game</button>`;
 }
 
 async function addMatch() {
   const home = $('mh').value.trim(), away = $('ma').value.trim(), kickoff = $('mk').value;
-  if (!home || !away || !kickoff) return toast('Fill in both teams and the kickoff time.');
-  const { error } = await sb.from('matches').insert({
+  if (!home || !away || !kickoff) return alert('Fill in both teams and the kickoff time.');
+  const { error } = await SB.from('matches').insert({
     id: 'm' + Date.now(), league: $('mlg').value.trim(), home, away,
     kickoff: new Date(kickoff).toISOString()
   });
-  if (error) return toast('Error: ' + error.message);
+  if (error) return alert('Error: ' + error.message);
   matchesScreen();
 }
 
 async function saveResult(id) {
   const g = s => $('r_' + id + '_' + s).value;
-  const { error } = await sb.from('matches').update({
+  const { error } = await SB.from('matches').update({
     ft_home: num(g('fh')), ft_away: num(g('fa')),
     ht_home: num(g('hh')), ht_away: num(g('ha')),
     first_scorer: g('fs') || null, status: 'finished'
   }).eq('id', id);
-  if (error) return toast('Error: ' + error.message);
-  toast('Result saved.');
+  if (error) return alert('Error: ' + error.message);
+  alert('Result saved.');
 }
 
 init();
