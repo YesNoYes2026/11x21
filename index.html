@@ -3,132 +3,360 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>11x21 fixture pull</title>
+<title>11x21</title>
 <style>
-  body{font-family:system-ui,sans-serif;max-width:560px;margin:0 auto;padding:12px;background:#111;color:#eee}
-  h1{color:#ffb000;font-size:22px}
-  input,button,textarea{font-size:15px;padding:8px;margin:4px 0;width:100%;box-sizing:border-box;border-radius:6px;border:1px solid #333;background:#222;color:#eee}
-  button{background:#ffb000;color:#111;border:0;font-weight:bold}
-  textarea{height:200px;font-family:monospace;font-size:12px}
+  body{font-family:system-ui,sans-serif;max-width:520px;margin:0 auto;padding:12px;background:#111;color:#eee}
+  h1{color:#ffb000;margin:4px 0 10px}
+  input,select,button{font-size:16px;padding:8px;margin:4px 0;width:100%;box-sizing:border-box;border-radius:6px;border:1px solid #333;background:#222;color:#eee}
+  button{background:#ffb000;color:#111;border:0;font-weight:bold;cursor:pointer}
+  .card{background:#1d1d1d;border-radius:8px;padding:10px;margin:10px 0}
+  .row{display:flex;gap:6px}
+  .row>*{width:50%}
+  table{width:100%;border-collapse:collapse;margin-top:6px}
+  td,th{padding:6px;border-bottom:1px solid #333;text-align:left}
   .muted{color:#999;font-size:13px}
-  .warn{color:#ff8a65;font-size:14px;white-space:pre-line}
-  .list{max-height:320px;overflow:auto;border:1px solid #333;border-radius:6px;padding:6px;margin:6px 0}
-  .list label{display:block;font-size:13px;padding:3px 0;border-bottom:1px solid #222}
-  .list input{width:auto;margin:0 6px 0 0}
+  .sec{background:#222;color:#ffb000;padding:4px 8px;margin-top:12px;border-radius:4px;font-weight:bold}
+  .ghost{background:#444;color:#eee}
+  label{display:block}
 </style>
 </head>
 <body>
-<h1>Fixtures to SQL (KSA time)</h1>
-<p class="muted">Paste your API-Football key. It is used only in this page and is not saved.</p>
-<input id="key" type="password" placeholder="API-Football key">
-<button onclick="run()">Pull fixtures 13–14 Nov 2026 (KSA)</button>
-<div id="status" class="muted"></div>
-<div id="notes" class="warn"></div>
-<div class="muted">Ticked matches go into the SQL. Untick anything that isn't an international match, tick anything missing.</div>
-<div id="list" class="list"></div>
-<textarea id="out" placeholder="SQL appears here"></textarea>
-<button onclick="copyOut()">Copy SQL</button>
+<h1>11x21</h1>
+<div id="app">Loading…</div>
 
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
 <script>
-// Fetch UTC days that cover KSA Fri 13 and Sat 14 (KSA = UTC+3).
-const UTC_DAYS = ['2026-11-12', '2026-11-13', '2026-11-14'];
-const KSA_DAYS = ['2026-11-13', '2026-11-14'];
-const KSA_MS = 3 * 60 * 60 * 1000;
-const BAD = ['PST', 'CANC', 'ABD', 'AWD', 'WO'];
-const INTL = /friendl|nations league|world cup|qualif|cup of nations|asian cup|arab cup|gold cup|copa america|olympic|euro\b/i;
+const SUPABASE_URL = "https://hbyhfjumwstmvasewhot.supabase.co";
+const SUPABASE_KEY = "sb_publishable_EAcMJDrnmYmKs03i95_nKQ_Flc59IbM";
+const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+const app = document.getElementById('app');
+let me = null;
 
 const $ = id => document.getElementById(id);
-const esc = s => String(s ?? '').replace(/'/g, "''");
-const html = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const num = v => (v === '' || v == null) ? null : Number(v);
+const toast = msg => alert(msg);
+const back = () => `<button class="ghost" onclick="main()" style="margin-top:10px">← Back</button>`;
+const opt = (cur, list) => list.map(([v, l]) => `<option value="${v}" ${cur === v ? 'selected' : ''}>${l}</option>`).join('');
 
-function ksaIso(d) {
-  const t = new Date(d.getTime() + KSA_MS);
-  const p = n => String(n).padStart(2, '0');
-  return `${t.getUTCFullYear()}-${p(t.getUTCMonth() + 1)}-${p(t.getUTCDate())}T${p(t.getUTCHours())}:${p(t.getUTCMinutes())}:00+03:00`;
-}
-const ksaDay = d => ksaIso(d).slice(0, 10);
-
-async function fetchDay(key, day) {
-  const r = await fetch(`https://v3.football.api-sports.io/fixtures?date=${day}`, {
-    headers: { 'x-apisports-key': key }
-  });
-  if (!r.ok) throw new Error(`HTTP ${r.status}`);
-  const j = await r.json();
-  if (j.errors && Object.keys(j.errors).length) throw new Error(JSON.stringify(j.errors));
-  return j.response || [];
-}
-
-let ROWS = [];
-
-async function run() {
-  const key = $('key').value.trim();
-  if (!key) return alert('Paste your API key first.');
-  ROWS = [];
-  $('notes').textContent = '';
-  $('list').innerHTML = '';
-  $('out').value = '';
-  $('status').textContent = 'Fetching…';
-
-  const seen = new Set();
-  const blocked = [];
-  const cancelled = [];
-
-  for (const day of UTC_DAYS) {
-    let list;
-    try { list = await fetchDay(key, day); }
-    catch (e) { blocked.push(`${day}: ${e.message}`); continue; }
-    for (const f of list) {
-      if (seen.has(f.fixture.id)) continue;
-      seen.add(f.fixture.id);
-      const d = new Date(f.fixture.date);
-      if (!KSA_DAYS.includes(ksaDay(d))) continue;
-      const label = `${f.league.name} (${f.league.country}): ${f.teams.home.name} v ${f.teams.away.name}`;
-      if (BAD.includes(f.fixture.status.short)) { cancelled.push(label + ` [${f.fixture.status.short}]`); continue; }
-      ROWS.push({
-        id: 'api' + f.fixture.id,
-        league: f.league.name,
-        home: f.teams.home.name,
-        away: f.teams.away.name,
-        kickoff: ksaIso(d),
-        label,
-        // Pre-tick only when it looks international. Club matches are unticked.
-        checked: (f.league.country === 'World' || INTL.test(f.league.name)) && !/club/i.test(f.league.name)
-      });
-    }
+async function init() {
+  const saved = JSON.parse(localStorage.getItem('11x21_me') || 'null');
+  if (saved) {
+    const { data } = await sb.from('players').select('*')
+      .eq('player_number', saved.player_number).eq('pin', saved.pin).maybeSingle();
+    if (data) { me = data; return main(); }
   }
-
-  ROWS.sort((a, b) => a.kickoff.localeCompare(b.kickoff));
-  renderList();
-
-  const notes = [];
-  if (blocked.length) notes.push('Not available on your plan: ' + blocked.join(' | '));
-  if (cancelled.length) notes.push('Postponed/cancelled (not included): ' + cancelled.join('; '));
-  $('notes').textContent = notes.join('\n');
-  $('status').textContent = `${ROWS.length} fixtures in KSA Fri 13 / Sat 14. ${ROWS.filter(r => r.checked).length} pre-ticked.`;
+  authScreen();
 }
 
-function renderList() {
-  $('list').innerHTML = ROWS.map((r, i) => `
-    <label><input type="checkbox" data-i="${i}" ${r.checked ? 'checked' : ''} onchange="toggle(${i}, this.checked)">
-      ${r.kickoff.slice(0, 16).replace('T', ' ')} KSA &nbsp; ${html(r.label)}</label>`).join('');
-  buildSql();
+function authScreen() {
+  app.innerHTML = `
+    <div class="card"><b>Sign up</b>
+      <input id="sname" placeholder="Your name">
+      <input id="spin" placeholder="PIN (4 digits)" inputmode="numeric">
+      <button onclick="signup()">Create player</button>
+    </div>
+    <div class="card"><b>Log in</b>
+      <input id="lnum" placeholder="Player number" inputmode="numeric">
+      <input id="lpin" placeholder="PIN" inputmode="numeric">
+      <button onclick="login()">Log in</button>
+    </div>`;
 }
 
-function toggle(i, v) { ROWS[i].checked = v; buildSql(); }
-
-function buildSql() {
-  const picked = ROWS.filter(r => r.checked);
-  if (!picked.length) { $('out').value = '-- nothing ticked'; return; }
-  const values = picked.map(r => `('${esc(r.id)}', '${esc(r.league)}', '${esc(r.home)}', '${esc(r.away)}', '${r.kickoff}')`);
-  $('out').value = `insert into matches (id, league, home, away, kickoff) values\n${values.join(',\n')}\non conflict (id) do nothing;`;
-  $('status').textContent = `${picked.length} ticked. SQL updated.`;
+async function signup() {
+  const name = $('sname').value.trim(), pin = $('spin').value.trim();
+  if (!name || !/^\d{4}$/.test(pin)) return toast('Enter a name and a 4-digit PIN.');
+  const { data, error } = await sb.from('players').insert({ name, pin }).select().single();
+  if (error) return toast('Error: ' + error.message);
+  setMe(data);
+  toast('Your player number is ' + data.player_number);
 }
 
-function copyOut() {
-  $('out').select();
-  document.execCommand('copy');
-  $('status').textContent = 'SQL copied. Paste it into the Supabase SQL Editor.';
+async function login() {
+  const n = Number($('lnum').value), pin = $('lpin').value.trim();
+  const { data } = await sb.from('players').select('*').eq('player_number', n).eq('pin', pin).maybeSingle();
+  if (!data) return toast('Wrong player number or PIN.');
+  setMe(data);
 }
+
+function setMe(p) {
+  me = p;
+  localStorage.setItem('11x21_me', JSON.stringify({ player_number: p.player_number, pin: p.pin }));
+  main();
+}
+
+function logout() {
+  localStorage.removeItem('11x21_me');
+  me = null;
+  authScreen();
+}
+
+function main() {
+  app.innerHTML = `
+    <div class="card">Player <b>${me.player_number}</b> — ${esc(me.name)}</div>
+    <button onclick="challengeScreen()">Challenge (set up)</button>
+    <button onclick="predictScreen()" style="margin-top:6px">Predict (play)</button>
+    <button onclick="scoresScreen()" style="margin-top:6px">Scores (check)</button>
+    <button onclick="matchesScreen()" style="margin-top:6px">Matches &amp; results</button>
+    <button class="ghost" onclick="logout()" style="margin-top:6px">Log out</button>`;
+}
+
+async function upcomingMatches() {
+  const { data } = await sb.from('matches').select('*').is('ft_home', null).order('kickoff');
+  return data || [];
+}
+
+async function allMatches() {
+  const { data } = await sb.from('matches').select('*').order('kickoff');
+  return data || [];
+}
+
+/* ---------- Challenge setup ---------- */
+
+async function challengeScreen() {
+  const ms = await upcomingMatches();
+  app.innerHTML = `
+    <div class="sec">New challenge</div>
+    <select id="ctype">
+      <option value="11">11 (light: FT scores + winner)</option>
+      <option value="21">21 (expert: all 6)</option>
+    </select>
+    <input id="cname" placeholder="Challenge name">
+    <input id="cinv" placeholder="Player numbers to invite, e.g. 3, 7, 12">
+    <div class="sec">Matches</div>
+    ${ms.length ? ms.map(m => `
+      <label class="card"><input type="checkbox" class="cm" value="${m.id}" style="width:auto">
+        ${esc(m.home)} v ${esc(m.away)}
+        <span class="muted">${new Date(m.kickoff).toLocaleString()}</span></label>`).join('')
+      : '<div class="muted">No upcoming matches. Add some under Matches &amp; results.</div>'}
+    <button onclick="createChallenge()">Create and lock</button>
+    ${back()}`;
+}
+
+async function createChallenge() {
+  const type = Number($('ctype').value), name = $('cname').value.trim() || 'Challenge';
+  const matchIds = [...document.querySelectorAll('.cm:checked')].map(c => c.value);
+  if (!matchIds.length) return toast('Pick at least one match.');
+  const invites = [...new Set($('cinv').value.split(',').map(s => Number(s.trim()))
+    .filter(n => n && n !== me.player_number))];
+  const code = Math.random().toString(36).slice(2, 8).toUpperCase();
+
+  const { data: ch, error } = await sb.from('challenges')
+    .insert({ code, type, name, created_by: me.player_number, status: 'open' }).select().single();
+  if (error) return toast('Error: ' + error.message);
+
+  await sb.from('challenge_matches').insert(matchIds.map(match_id => ({ challenge_id: ch.id, match_id })));
+  await sb.from('invites').insert([
+    { challenge_id: ch.id, player_number: me.player_number, status: 'accepted' },
+    ...invites.map(p => ({ challenge_id: ch.id, player_number: p, status: 'pending' }))
+  ]);
+  toast('Challenge created and sent out.');
+  main();
+}
+
+/* ---------- Predict ---------- */
+
+async function predictScreen() {
+  app.innerHTML = 'Loading…';
+  const { data: inv } = await sb.from('invites')
+    .select('challenge_id,status,challenges(name,type,created_by)')
+    .eq('player_number', me.player_number);
+  const pending = (inv || []).filter(i => i.status === 'pending');
+  const accepted = (inv || []).filter(i => i.status === 'accepted');
+
+  let h = `<div class="sec">Invitations</div>`;
+  h += pending.length
+    ? pending.map(i => `<div class="card"><b>${esc(i.challenges.name)}</b> (${i.challenges.type})
+        <div class="row">
+          <button onclick="respond(${i.challenge_id},'accepted')">Accept</button>
+          <button class="ghost" onclick="respond(${i.challenge_id},'declined')">Decline</button>
+        </div></div>`).join('')
+    : '<div class="muted">No invitations.</div>';
+
+  h += `<div class="sec">Your challenges</div>`;
+  for (const i of accepted) h += await predictCard(i.challenge_id, i.challenges);
+  if (!accepted.length) h += '<div class="muted">Accept an invitation or create a challenge.</div>';
+
+  app.innerHTML = h + back();
+}
+
+async function respond(cid, status) {
+  await sb.from('invites').update({ status }).eq('challenge_id', cid).eq('player_number', me.player_number);
+  predictScreen();
+}
+
+async function predictCard(cid, ch) {
+  const { data: cm } = await sb.from('challenge_matches').select('match_id').eq('challenge_id', cid);
+  const { data: ms } = await sb.from('matches').select('*').in('id', (cm || []).map(x => x.match_id)).order('kickoff');
+  const open = (ms || []).filter(m => m.ft_home == null);
+  const { data: preds } = await sb.from('predictions').select('*')
+    .eq('challenge_id', cid).eq('player_number', me.player_number);
+  const pm = Object.fromEntries((preds || []).map(p => [p.match_id, p]));
+
+  let h = `<div class="card"><b>${esc(ch.name)}</b> — ${ch.type}`;
+  if (!open.length) return h + ` <span class="muted">(ended)</span></div>`;
+
+  for (const m of open) {
+    const p = pm[m.id] || {};
+    h += `<div style="margin-top:8px"><b>${esc(m.home)} v ${esc(m.away)}</b>
+      <div class="row">
+        <input id="f_${cid}_${m.id}_h" placeholder="${esc(m.home)} FT" inputmode="numeric" value="${p.ft_home ?? ''}">
+        <input id="f_${cid}_${m.id}_a" placeholder="${esc(m.away)} FT" inputmode="numeric" value="${p.ft_away ?? ''}">
+      </div>
+      <select id="w_${cid}_${m.id}">
+        <option value="">Winner</option>${opt(p.winner, [['home','Home win'],['draw','Draw'],['away','Away win']])}
+      </select>`;
+    if (ch.type === 21) {
+      h += `<div class="row">
+          <input id="h_${cid}_${m.id}_h" placeholder="HT ${esc(m.home)}" inputmode="numeric" value="${p.ht_home ?? ''}">
+          <input id="h_${cid}_${m.id}_a" placeholder="HT ${esc(m.away)}" inputmode="numeric" value="${p.ht_away ?? ''}">
+        </div>
+        <select id="fs_${cid}_${m.id}">
+          <option value="">First to score</option>${opt(p.first_scorer, [['home','Home'],['away','Away'],['none','No one']])}
+        </select>`;
+    }
+    h += `</div>`;
+  }
+  h += `<button onclick="savePredictions(${cid},${ch.type})" style="margin-top:8px">Save predictions</button></div>`;
+  return h;
+}
+
+async function savePredictions(cid, type) {
+  const { data: cm } = await sb.from('challenge_matches').select('match_id').eq('challenge_id', cid);
+  const g = id => { const e = document.getElementById(id); return e ? e.value : ''; };
+  const rows = (cm || []).map(x => x.match_id).map(mid => {
+    const r = {
+      challenge_id: cid, player_number: me.player_number, match_id: mid,
+      ft_home: num(g(`f_${cid}_${mid}_h`)), ft_away: num(g(`f_${cid}_${mid}_a`)),
+      winner: g(`w_${cid}_${mid}`) || null
+    };
+    if (type === 21) {
+      r.ht_home = num(g(`h_${cid}_${mid}_h`));
+      r.ht_away = num(g(`h_${cid}_${mid}_a`));
+      r.first_scorer = g(`fs_${cid}_${mid}`) || null;
+    }
+    return r;
+  }).filter(r => r.ft_home != null || r.ft_away != null || r.winner || r.first_scorer);
+
+  if (!rows.length) return toast('Nothing to save yet.');
+  const { error } = await sb.from('predictions').upsert(rows, { onConflict: 'challenge_id,player_number,match_id' });
+  if (error) return toast('Error: ' + error.message);
+  toast('Saved.');
+}
+
+/* ---------- Scores ---------- */
+
+// Points per prediction, per the agreed rules.
+function sc(p, a) { if (p == null || a == null) return 0; return Math.max(0, 3 - Math.abs(p - a)); }
+
+function pts(p, m, type) {
+  if (m.ft_home == null) return null;
+  let t = 0;
+  const actualWinner = m.ft_home > m.ft_away ? 'home' : m.ft_home < m.ft_away ? 'away' : 'draw';
+  if (p.winner === actualWinner) t += 5;
+  t += sc(p.ft_home, m.ft_home) + sc(p.ft_away, m.ft_away);
+  if (type === 21) {
+    t += sc(p.ht_home, m.ht_home) + sc(p.ht_away, m.ht_away);
+    if (m.first_scorer && p.first_scorer === m.first_scorer) t += 4;
+  }
+  return t;
+}
+
+async function scoresScreen() {
+  app.innerHTML = 'Loading…';
+  const { data: inv } = await sb.from('invites')
+    .select('challenge_id,challenges(name,type)')
+    .eq('player_number', me.player_number).eq('status', 'accepted');
+  let h = '';
+  for (const i of inv || []) h += await scoreCard(i.challenge_id, i.challenges);
+  app.innerHTML = (h || '<div class="muted">No challenges yet.</div>') + back();
+}
+
+async function scoreCard(cid, ch) {
+  const { data: cm } = await sb.from('challenge_matches').select('match_id').eq('challenge_id', cid);
+  const { data: ms } = await sb.from('matches').select('*').in('id', (cm || []).map(x => x.match_id));
+  const { data: mem } = await sb.from('invites').select('player_number,players(name)')
+    .eq('challenge_id', cid).eq('status', 'accepted');
+  const { data: preds } = await sb.from('predictions').select('*').eq('challenge_id', cid);
+
+  const matches = ms || [];
+  const played = matches.filter(m => m.ft_home != null);
+  const ended = matches.length > 0 && played.length === matches.length;
+
+  const rows = (mem || []).map(x => {
+    let total = 0;
+    for (const p of (preds || []).filter(p => p.player_number === x.player_number)) {
+      const m = matches.find(mm => mm.id === p.match_id);
+      if (m) { const v = pts(p, m, ch.type); if (v != null) total += v; }
+    }
+    return { name: x.players?.name || '?', total };
+  }).sort((a, b) => b.total - a.total);
+
+  // Ties share a rank: rank = 1 + number of players with strictly more points.
+  const ranked = rows.map(r => ({ ...r, rank: rows.filter(o => o.total > r.total).length + 1 }));
+
+  return `<div class="card"><b>${esc(ch.name)}</b> — ${ch.type}
+    ${ended ? '<span class="muted">(ended)</span>' : `<span class="muted">(${played.length}/${matches.length} played)</span>`}
+    <table><tr><th>#</th><th>Player</th><th>Points</th></tr>
+      ${ranked.map(r => `<tr><td>${r.rank}</td><td>${esc(r.name)}</td><td>${r.total}</td></tr>`).join('')}
+    </table></div>`;
+}
+
+/* ---------- Matches & results (admin) ---------- */
+
+async function matchesScreen() {
+  const ms = await allMatches();
+  app.innerHTML = `
+    <div class="sec">Add match</div>
+    <input id="mlg" placeholder="League (e.g. Saudi League)">
+    <input id="mh" placeholder="Home team">
+    <input id="ma" placeholder="Away team">
+    <input id="mk" type="datetime-local">
+    <button onclick="addMatch()">Add match</button>
+    <div class="sec">Results (enter after the match)</div>
+    ${ms.map(m => `
+      <div class="card"><b>${esc(m.home)} v ${esc(m.away)}</b>
+        <span class="muted">${new Date(m.kickoff).toLocaleString()}</span>
+        <div class="row">
+          <input id="r_${m.id}_fh" placeholder="FT ${esc(m.home)}" inputmode="numeric" value="${m.ft_home ?? ''}">
+          <input id="r_${m.id}_fa" placeholder="FT ${esc(m.away)}" inputmode="numeric" value="${m.ft_away ?? ''}">
+        </div>
+        <div class="row">
+          <input id="r_${m.id}_hh" placeholder="HT ${esc(m.home)}" inputmode="numeric" value="${m.ht_home ?? ''}">
+          <input id="r_${m.id}_ha" placeholder="HT ${esc(m.away)}" inputmode="numeric" value="${m.ht_away ?? ''}">
+        </div>
+        <select id="r_${m.id}_fs">
+          <option value="">First to score</option>${opt(m.first_scorer, [['home','Home'],['away','Away'],['none','No one']])}
+        </select>
+        <button onclick="saveResult('${m.id}')" style="margin-top:6px">Save result</button>
+      </div>`).join('')}
+    ${back()}`;
+}
+
+async function addMatch() {
+  const home = $('mh').value.trim(), away = $('ma').value.trim(), kickoff = $('mk').value;
+  if (!home || !away || !kickoff) return toast('Fill in both teams and the kickoff time.');
+  const { error } = await sb.from('matches').insert({
+    id: 'm' + Date.now(), league: $('mlg').value.trim(), home, away,
+    kickoff: new Date(kickoff).toISOString()
+  });
+  if (error) return toast('Error: ' + error.message);
+  matchesScreen();
+}
+
+async function saveResult(id) {
+  const g = s => $('r_' + id + '_' + s).value;
+  const { error } = await sb.from('matches').update({
+    ft_home: num(g('fh')), ft_away: num(g('fa')),
+    ht_home: num(g('hh')), ht_away: num(g('ha')),
+    first_scorer: g('fs') || null, status: 'finished'
+  }).eq('id', id);
+  if (error) return toast('Error: ' + error.message);
+  toast('Result saved.');
+}
+
+init();
 </script>
 </body>
 </html>
